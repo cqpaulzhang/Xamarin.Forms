@@ -73,7 +73,11 @@ namespace Xamarin.Forms
 
 		public ListView([Parameter("CachingStrategy")] ListViewCachingStrategy cachingStrategy) : this()
 		{
-			if (Device.RuntimePlatform == Device.Android || Device.RuntimePlatform == Device.iOS || Device.RuntimePlatform == Device.macOS)
+			// null => UnitTest "platform"
+			if (Device.RuntimePlatform == null || 
+				Device.RuntimePlatform == Device.Android || 
+				Device.RuntimePlatform == Device.iOS || 
+				Device.RuntimePlatform == Device.macOS)
 				CachingStrategy = cachingStrategy;
 		}
 
@@ -375,6 +379,10 @@ namespace Xamarin.Forms
 		public string GetDisplayTextFromGroup(object cell)
 		{
 			int groupIndex = TemplatedItems.GetGlobalIndexOfGroup(cell);
+
+			if (groupIndex == -1)
+				return cell.ToString();
+
 			var group = TemplatedItems.GetGroup(groupIndex);
 
 			string displayBinding = null;
