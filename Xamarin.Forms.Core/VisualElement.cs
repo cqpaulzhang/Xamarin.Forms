@@ -13,7 +13,8 @@ namespace Xamarin.Forms
 
 		public static readonly BindableProperty InputTransparentProperty = BindableProperty.Create("InputTransparent", typeof(bool), typeof(VisualElement), default(bool));
 
-		public static readonly BindableProperty IsEnabledProperty = BindableProperty.Create("IsEnabled", typeof(bool), typeof(VisualElement), true);
+		public static readonly BindableProperty IsEnabledProperty = BindableProperty.Create("IsEnabled", typeof(bool), 
+			typeof(VisualElement), true, propertyChanged: OnIsEnabledPropertyChanged);
 
 		static readonly BindablePropertyKey XPropertyKey = BindableProperty.CreateReadOnly("X", typeof(double), typeof(VisualElement), default(double));
 
@@ -88,8 +89,8 @@ namespace Xamarin.Forms
 		public static readonly BindableProperty MinimumHeightRequestProperty = BindableProperty.Create("MinimumHeightRequest", typeof(double), typeof(VisualElement), -1d, propertyChanged: OnRequestChanged);
 
 		[EditorBrowsable(EditorBrowsableState.Never)]
-		public static readonly BindablePropertyKey IsFocusedPropertyKey = BindableProperty.CreateReadOnly("IsFocused", typeof(bool), typeof(VisualElement), default(bool),
-			propertyChanged: OnIsFocusedPropertyChanged);
+		public static readonly BindablePropertyKey IsFocusedPropertyKey = BindableProperty.CreateReadOnly("IsFocused", 
+			typeof(bool), typeof(VisualElement), default(bool), propertyChanged: OnIsFocusedPropertyChanged);
 
 		public static readonly BindableProperty IsFocusedProperty = IsFocusedPropertyKey.BindableProperty;
 
@@ -216,6 +217,7 @@ namespace Xamarin.Forms
 			get { return (bool)GetValue(IsFocusedProperty); }
 		}
 
+		[TypeConverter(typeof(VisibilityConverter))]
 		public bool IsVisible
 		{
 			get { return (bool)GetValue(IsVisibleProperty); }
@@ -710,10 +712,7 @@ namespace Xamarin.Forms
 
 		internal void MockBounds(Rectangle bounds)
 		{
-			_mockX = bounds.X;
-			_mockY = bounds.Y;
-			_mockWidth = bounds.Width;
-			_mockHeight = bounds.Height;
+			(_mockX, _mockY, _mockWidth, _mockHeight) = bounds;
 		}
 
 		internal virtual void OnConstraintChanged(LayoutConstraint oldConstraint, LayoutConstraint newConstraint)
@@ -728,6 +727,14 @@ namespace Xamarin.Forms
 		internal virtual void OnIsVisibleChanged(bool oldValue, bool newValue)
 		{
 			InvalidateMeasureInternal(InvalidationTrigger.Undefined);
+		}
+
+		internal override void OnResourcesChanged(object sender, ResourcesChangedEventArgs e)
+		{
+			if (e == ResourcesChangedEventArgs.StyleSheets)
+				ApplyStyleSheets();
+			else
+				base.OnResourcesChanged(sender, e);
 		}
 
 		internal override void OnParentResourcesChanged(IEnumerable<KeyValuePair<string, object>> values)
@@ -786,9 +793,30 @@ namespace Xamarin.Forms
 			self.NotifyFlowDirectionChanged();
 		}
 
+		static void OnIsEnabledPropertyChanged(BindableObject bindable, object oldValue, object newValue)
+		{
+			var element = (VisualElement)bindable;
+
+			if (element == null)
+			{
+				return;
+			}
+
+			var isEnabled = (bool)newValue;
+
+			VisualStateManager.GoToState(element, isEnabled 
+				? VisualStateManager.CommonStates.Normal 
+				: VisualStateManager.CommonStates.Disabled);
+		}
+
 		static void OnIsFocusedPropertyChanged(BindableObject bindable, object oldvalue, object newvalue)
 		{
-			var element = bindable as VisualElement;
+			var element = (VisualElement)bindable;
+
+			if (element == null)
+			{
+				return;
+			}
 
 			var isFocused = (bool)newvalue;
 			if (isFocused)
@@ -799,6 +827,10 @@ namespace Xamarin.Forms
 			{
 				element.OnUnfocus();
 			}
+
+			VisualStateManager.GoToState(element, isFocused
+				? VisualStateManager.CommonStates.Normal
+				: VisualStateManager.CommonStates.Focused);
 		}
 
 		static void OnRequestChanged(BindableObject bindable, object oldvalue, object newvalue)
@@ -856,6 +888,27 @@ namespace Xamarin.Forms
 			public bool Focus { get; set; }
 
 			public bool Result { get; set; }
+		}
+
+		public class VisibilityConverter : TypeConverter
+		{
+			public override object ConvertFromInvariantString(string value)
+			{
+				if (value != null) {
+					if (value.Equals("true", StringComparison.OrdinalIgnoreCase))
+						return true;
+					if (value.Equals("visible", StringComparison.OrdinalIgnoreCase))
+						return true;
+					if (value.Equals("false", StringComparison.OrdinalIgnoreCase))
+						return false;
+					if (value.Equals("hidden", StringComparison.OrdinalIgnoreCase))
+						return false;
+					if (value.Equals("collapse", StringComparison.OrdinalIgnoreCase))
+						return false;
+				}
+				throw new InvalidOperationException(string.Format("Cannot convert \"{0}\" into {1}", value, typeof(bool)));
+
+			}
 		}
 	}
 }

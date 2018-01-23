@@ -1,5 +1,6 @@
 ﻿using System;
 using System.ComponentModel;
+using System.Linq;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
 using Windows.UI.Xaml.Media;
@@ -10,6 +11,8 @@ namespace Xamarin.Forms.Platform.UWP
 	public class DatePickerRenderer : ViewRenderer<DatePicker, Windows.UI.Xaml.Controls.DatePicker>
 	{
 		Brush _defaultBrush;
+		bool _fontApplied;
+		FontFamily _defaultFontFamily;
 
 		protected override void Dispose(bool disposing)
 		{
@@ -33,6 +36,10 @@ namespace Xamarin.Forms.Platform.UWP
 					Control.Loaded += ControlOnLoaded;
 					Control.DateChanged += OnControlDateChanged;
 				}
+				else
+				{
+					WireUpFormsVsm();
+				}
 
 				UpdateMinimumDate();
 				UpdateMaximumDate();
@@ -45,10 +52,28 @@ namespace Xamarin.Forms.Platform.UWP
 
 		void ControlOnLoaded(object sender, RoutedEventArgs routedEventArgs)
 		{
+			WireUpFormsVsm();
+
 			// The defaults from the control template won't be available
 			// right away; we have to wait until after the template has been applied
 			_defaultBrush = Control.Foreground;
+			_defaultFontFamily = Control.FontFamily;
+			UpdateFont();
 			UpdateTextColor();
+		}
+
+		void WireUpFormsVsm()
+		{
+			if (!Element.UseFormsVsm())
+			{
+				return;
+			}
+
+			InterceptVisualStateManager.Hook(Control.GetFirstDescendant<StackPanel>(), Control, Element);
+
+			// We also have to intercept the VSM changes on the DatePicker's button
+			var button = Control.GetDescendantsByName<Windows.UI.Xaml.Controls.Button>("FlyoutButton").FirstOrDefault();
+			InterceptVisualStateManager.Hook(button.GetFirstDescendant<Windows.UI.Xaml.Controls.Grid>(), button, Element);
 		}
 
 		protected override void OnElementPropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -65,6 +90,8 @@ namespace Xamarin.Forms.Platform.UWP
 				UpdateTextColor();
 			else if (e.PropertyName == VisualElement.FlowDirectionProperty.PropertyName)
 				UpdateFlowDirection();
+			else if (e.PropertyName == DatePicker.FontAttributesProperty.PropertyName || e.PropertyName == DatePicker.FontFamilyProperty.PropertyName || e.PropertyName == DatePicker.FontSizeProperty.PropertyName)
+				UpdateFont();
 		}
 
 		protected override bool PreventGestureBubbling { get; set; } = true;
@@ -87,6 +114,39 @@ namespace Xamarin.Forms.Platform.UWP
 		void UpdateFlowDirection()
 		{
 			Control.UpdateFlowDirection(Element);
+		}
+		
+		void UpdateFont()
+		{
+			if (Control == null)
+				return;
+
+			DatePicker datePicker = Element;
+
+			if (datePicker == null)
+				return;
+
+			bool datePickerIsDefault = datePicker.FontFamily == null && datePicker.FontSize == Device.GetNamedSize(NamedSize.Default, typeof(DatePicker), true) && datePicker.FontAttributes == FontAttributes.None;
+
+			if (datePickerIsDefault && !_fontApplied)
+				return;
+
+			if (datePickerIsDefault)
+			{
+				// ReSharper disable AccessToStaticMemberViaDerivedType
+				Control.ClearValue(ComboBox.FontStyleProperty);
+				Control.ClearValue(ComboBox.FontSizeProperty);
+				Control.ClearValue(ComboBox.FontFamilyProperty);
+				Control.ClearValue(ComboBox.FontWeightProperty);
+				Control.ClearValue(ComboBox.FontStretchProperty);
+				// ReSharper restore AccessToStaticMemberViaDerivedType
+			}
+			else
+			{
+				Control.ApplyFont(datePicker);
+			}
+
+			_fontApplied = true;
 		}
 
 		void UpdateMaximumDate()

@@ -43,6 +43,7 @@ namespace Xamarin.Forms.Build.Tasks
 		public TreeVisitingMode VisitingMode => TreeVisitingMode.BottomUp;
 		public bool StopOnDataTemplate => true;
 		public bool VisitNodeOnDataTemplate => true;
+		public bool SkipChildren(INode node, INode parentNode) => false;
 
 		ModuleDefinition Module { get; }
 
@@ -64,6 +65,8 @@ namespace Xamarin.Forms.Build.Tasks
 					return;
 			}
 
+			if (TrySetRuntimeName(propertyName, Context.Variables[(IElementNode)parentNode], node))
+				return;
 			if (skips.Contains(propertyName))
 				return;
 			if (parentNode is IElementNode && ((IElementNode)parentNode).SkipProperties.Contains (propertyName))
@@ -474,27 +477,37 @@ namespace Xamarin.Forms.Build.Tasks
 			getter.Body.InitLocals = true;
 			var il = getter.Body.GetILProcessor();
 
-			il.Emit(OpCodes.Ldarg_0);
-			if (properties != null && properties.Count != 0) {
+			if (properties == null || properties.Count == 0) { //return self
+				il.Emit(Ldarg_0);
+				il.Emit(Ret);
+			}
+			else {
+				if (tSourceRef.IsValueType)
+					il.Emit(Ldarga_S, (byte)0);
+				else
+					il.Emit(Ldarg_0);
+
 				foreach (var propTuple in properties) {
 					var property = propTuple.Item1;
 					var indexerArg = propTuple.Item2;
 					if (indexerArg != null) {
-						if (property.GetMethod.Parameters [0].ParameterType == module.TypeSystem.String)
-							il.Emit(OpCodes.Ldstr, indexerArg);
-						else if (property.GetMethod.Parameters [0].ParameterType == module.TypeSystem.Int32) {
+						if (property.GetMethod.Parameters[0].ParameterType == module.TypeSystem.String)
+							il.Emit(Ldstr, indexerArg);
+						else if (property.GetMethod.Parameters[0].ParameterType == module.TypeSystem.Int32) {
 							int index;
 							if (!int.TryParse(indexerArg, out index))
 								throw new XamlParseException($"Binding: {indexerArg} could not be parsed as an index for a {property.Name}", node as IXmlLineInfo);
-							il.Emit(OpCodes.Ldc_I4, index);
+							il.Emit(Ldc_I4, index);
 						}
 					}
-					il.Emit(OpCodes.Callvirt, module.ImportReference(property.GetMethod));
-				}
+					if (property.GetMethod.IsVirtual)
+						il.Emit(Callvirt, module.ImportReference(property.GetMethod));
+					else
+						il.Emit(Call, module.ImportReference(property.GetMethod));
+					}
+
+				il.Emit(Ret);
 			}
-
-			il.Emit(OpCodes.Ret);
-
 			context.Body.Method.DeclaringType.Methods.Add(getter);
 
 			var funcRef = module.ImportReference(typeof(Func<,>));
@@ -506,9 +519,9 @@ namespace Xamarin.Forms.Build.Tasks
 //			IL_0008:  ldftn string class Test::'<Main>m__0'(class ViewModel)
 //			IL_000e:  newobj instance void class [mscorlib]System.Func`2<class ViewModel, string>::'.ctor'(object, native int)
 
-			yield return Instruction.Create(OpCodes.Ldnull);
-			yield return Instruction.Create(OpCodes.Ldftn, getter);
-			yield return Instruction.Create(OpCodes.Newobj, module.ImportReference(funcCtor));
+			yield return Create(Ldnull);
+			yield return Create(Ldftn, getter);
+			yield return Create(Newobj, module.ImportReference(funcCtor));
 		}
 
 		static IEnumerable<Instruction> CompiledBindingGetSetter(TypeReference tSourceRef, TypeReference tPropertyRef, IList<Tuple<PropertyDefinition, string>> properties, ElementNode node, ILContext context)
@@ -552,7 +565,10 @@ namespace Xamarin.Forms.Build.Tasks
 				yield break;
 			}
 
-			il.Emit(OpCodes.Ldarg_0);
+			if (tSourceRef.IsValueType)
+				il.Emit(Ldarga_S, (byte)0);
+			else
+				il.Emit(Ldarg_0);
 			for (int i = 0; i < properties.Count - 1; i++) {
 				var property = properties[i].Item1;
 				var indexerArg = properties[i].Item2;
@@ -566,7 +582,10 @@ namespace Xamarin.Forms.Build.Tasks
 						il.Emit(OpCodes.Ldc_I4, index);
 					}
 				}
-				il.Emit(OpCodes.Callvirt, module.ImportReference(property.GetMethod));
+				if (property.GetMethod.IsVirtual)
+					il.Emit(Callvirt, module.ImportReference(property.GetMethod));
+				else
+					il.Emit(Call, module.ImportReference(property.GetMethod));
 			}
 
 			var indexer = properties.Last().Item2;
@@ -580,8 +599,16 @@ namespace Xamarin.Forms.Build.Tasks
 					il.Emit(OpCodes.Ldc_I4, index);
 				}
 			}
-			il.Emit(OpCodes.Ldarg_1);
-			il.Emit(OpCodes.Callvirt, module.ImportReference(setterRef));
+			if (tPropertyRef.IsValueType)
+				il.Emit(Ldarga_S, (byte)1);
+			else
+				il.Emit(Ldarg_1);
+
+			if (setterRef.IsVirtual)
+				il.Emit(Callvirt, module.ImportReference(setterRef));
+			else
+				il.Emit(Call, module.ImportReference(setterRef));
+
 			il.Emit(OpCodes.Ret);
 
 			context.Body.Method.DeclaringType.Methods.Add(setter);
@@ -625,7 +652,7 @@ namespace Xamarin.Forms.Build.Tasks
 				
 			for (int i = 0; i < properties.Count; i++) {
 				var tuple = properties [i];
-				var partGetter = new MethodDefinition($"<{context.Body.Method.Name}>typedBindingsM__{typedBindingCount++}", MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static, tPropertyRef) {
+				var partGetter = new MethodDefinition($"<{context.Body.Method.Name}>typedBindingsM__{typedBindingCount++}", MethodAttributes.Private | MethodAttributes.HideBySig | MethodAttributes.Static, module.TypeSystem.Object) {
 					Parameters = {
 						new ParameterDefinition(tSourceRef)
 					},
@@ -635,7 +662,23 @@ namespace Xamarin.Forms.Build.Tasks
 				};
 				partGetter.Body.InitLocals = true;
 				var il = partGetter.Body.GetILProcessor();
-				il.Emit(OpCodes.Ldarg_0);
+
+				if (i == 0) { //return self
+					il.Emit(Ldarg_0);
+					if (tSourceRef.IsValueType)
+						il.Emit(Box, module.ImportReference(tSourceRef));
+
+					il.Emit(Ret);
+					context.Body.Method.DeclaringType.Methods.Add(partGetter);
+					partGetters.Add(partGetter);
+					continue;
+				}
+
+				if (tSourceRef.IsValueType)
+					il.Emit(Ldarga_S, (byte)0);
+				else
+					il.Emit(Ldarg_0);
+				var lastGetterTypeRef = tSourceRef;
 				for (int j = 0; j < i; j++) {
 					var propTuple = properties [j];
 					var property = propTuple.Item1;
@@ -650,8 +693,15 @@ namespace Xamarin.Forms.Build.Tasks
 							il.Emit(OpCodes.Ldc_I4, index);
 						}
 					}
-					il.Emit(OpCodes.Callvirt, module.ImportReference(property.GetMethod));
+					if (property.GetMethod.IsVirtual)
+						il.Emit(Callvirt, module.ImportReference(property.GetMethod));
+					else
+						il.Emit(Call, module.ImportReference(property.GetMethod));
+					lastGetterTypeRef = property.PropertyType;
 				}
+				if (lastGetterTypeRef.IsValueType)
+					il.Emit(Box, module.ImportReference(lastGetterTypeRef));
+
 				il.Emit(OpCodes.Ret);
 				context.Body.Method.DeclaringType.Methods.Add(partGetter);
 				partGetters.Add(partGetter);
@@ -1014,9 +1064,9 @@ namespace Xamarin.Forms.Build.Tasks
 			var vardef = context.Variables [elementNode];
 			var implicitOperator = vardef.VariableType.GetImplicitOperatorTo(propertyType, module);
 
-			if (implicitOperator != null)
-				return true;
 			if (vardef.VariableType.InheritsFromOrImplements(propertyType))
+				return true;
+			if (implicitOperator != null)
 				return true;
 			if (propertyType.FullName == "System.Object")
 				return true;
@@ -1083,7 +1133,7 @@ namespace Xamarin.Forms.Build.Tasks
 				var vardef = context.Variables [elementNode];
 				var implicitOperator = vardef.VariableType.GetImplicitOperatorTo(propertyType, module);
 				yield return Instruction.Create(OpCodes.Ldloc, vardef);
-				if (implicitOperator != null) {
+				if (!vardef.VariableType.InheritsFromOrImplements(propertyType) && implicitOperator != null) {
 //					IL_000f:  call !0 class [Xamarin.Forms.Core]Xamarin.Forms.OnPlatform`1<bool>::op_Implicit(class [Xamarin.Forms.Core]Xamarin.Forms.OnPlatform`1<!0>)
 					yield return Instruction.Create(OpCodes.Call, module.ImportReference(implicitOperator));
 				} else if (!vardef.VariableType.IsValueType && propertyType.IsValueType)
@@ -1144,16 +1194,20 @@ namespace Xamarin.Forms.Build.Tasks
 		static bool CanAddToResourceDictionary(TypeReference collectionType, IElementNode node, IXmlLineInfo lineInfo, ILContext context)
 		{
 			if (   collectionType.FullName != "Xamarin.Forms.ResourceDictionary"
-			    && collectionType.Resolve().BaseType?.FullName != "Xamarin.Forms.ResourceDictionary")
+				&& collectionType.Resolve().BaseType?.FullName != "Xamarin.Forms.ResourceDictionary")
 				return false;
+
 
 			if (node.Properties.ContainsKey(XmlName.xKey))
 				return true;
 
-			if (node.XmlType.Name == "Style")
-				return true;
-
-			if (node.XmlType.Name == "ResourceDictionary")
+			//is there a RD.Add() overrides that accepts this ?
+			var nodeTypeRef = context.Variables[node].VariableType;
+			var module = context.Body.Method.Module;
+			if (module.ImportReference(typeof(ResourceDictionary)).Resolve().Methods.Any(md =>
+						   md.Name == "Add"
+						&& md.Parameters.Count == 1
+						&& TypeRefComparer.Default.Equals(md.Parameters[0].ParameterType, nodeTypeRef)))
 				return true;
 
 			throw new XamlParseException("resources in ResourceDictionary require a x:Key attribute", lineInfo);
@@ -1212,7 +1266,7 @@ namespace Xamarin.Forms.Build.Tasks
 				yield break;
 			}
 
-			var nodeTypeRef = node.XmlType.GetTypeReference(module, lineInfo);
+			var nodeTypeRef = context.Variables[node].VariableType;
 			yield return Create(Ldloc, context.Variables[node]);
 			yield return Create(Callvirt,
 				module.ImportReference(
@@ -1349,6 +1403,26 @@ namespace Xamarin.Forms.Build.Tasks
 			parentContext.IL.Emit(OpCodes.Callvirt, module.ImportReference(propertySetter));
 
 			loadTemplate.Body.Optimize();
+		}
+
+		bool TrySetRuntimeName(XmlName propertyName, VariableDefinition variableDefinition, ValueNode node)
+		{
+			if (propertyName != XmlName.xName)
+				return false;
+
+			var attributes = variableDefinition.VariableType.Resolve()
+				.CustomAttributes.Where(attribute => attribute.AttributeType.FullName == "Xamarin.Forms.Xaml.RuntimeNamePropertyAttribute").ToList();
+
+			if (!attributes.Any())
+				return false;
+
+			var runTimeName = attributes[0].ConstructorArguments[0].Value as string;
+
+			if (string.IsNullOrEmpty(runTimeName)) 
+				return false;
+
+			Context.IL.Append(SetPropertyValue(variableDefinition, new XmlName("", runTimeName), node, Context, node));
+			return true;
 		}
 	}
 

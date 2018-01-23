@@ -34,9 +34,9 @@ namespace Xamarin.Forms.Build.Tasks
 			if (   (xasm.StartsWith("System.Runtime", StringComparison.Ordinal)
 					|| xasm.StartsWith("mscorlib", StringComparison.Ordinal)
 					|| xasm.StartsWith("netstandard", StringComparison.Ordinal))
-				&& (xasm.StartsWith("System.Runtime", StringComparison.Ordinal)
-					|| xasm.StartsWith("mscorlib", StringComparison.Ordinal)
-					|| xasm.StartsWith("netstandard", StringComparison.Ordinal)))
+				&& (yasm.StartsWith("System.Runtime", StringComparison.Ordinal)
+					|| yasm.StartsWith("mscorlib", StringComparison.Ordinal)
+					|| yasm.StartsWith("netstandard", StringComparison.Ordinal)))
 				return true;
 			return xasm == yasm;
 		}
@@ -326,8 +326,12 @@ namespace Xamarin.Forms.Build.Tasks
 				return self;
 
 			List<TypeReference> args = new List<TypeReference>();
-			for (var i = 0; i < genericself.GenericArguments.Count; i++)
-				args.Add(genericdeclType.GenericArguments[(genericself.GenericArguments[i] as GenericParameter).Position]);
+			for (var i = 0; i < genericself.GenericArguments.Count; i++) {
+				if (!genericself.GenericArguments[i].IsGenericParameter)
+					args.Add(genericself.GenericArguments[i]);
+				else
+					args.Add(genericdeclType.GenericArguments[(genericself.GenericArguments[i] as GenericParameter).Position]);
+			}
 			return self.GetElementType().MakeGenericInstanceType(args.ToArray());
 		}
 	}
